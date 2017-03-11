@@ -1,3 +1,11 @@
-This repository contains code snipets and applications to use with Pidgeon 1 sub-GHz radio transceiver USB stick.
 
-work in progress...
+
+Structure of examples :
+1.LED blink - GPIO
+  1.1
+  1.2
+2.
+  2.1
+3.
+4.
+5.
