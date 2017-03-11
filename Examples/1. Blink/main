@@ -1,1 +1,98 @@
+#include "stm32f0xx.h"
+#include "stm32f0xx_gpio.h"
+#include "stm32f0xx_rcc.h"
+
+/*
+ *   Example shows basic setting of system frequency, GPIO peripheral initialization and simple toggling of single output pin.
+ *
+ *   Toggling is demonstrated with two methods :	Standard peripheral libraries (SPL), Registers
+ *   Using libraries from manufacturer is usually easier to implement and understand.
+ *   However, sometimes speed and/or latency is more important and for these cases writing values directly into registers is more convenient.
+ *   Manually setting register values uses less overhead than SPL, but also makes bug finding more difficult.
+ *   Difference in implementation can be seen in something as simple as LED blinking.
+ *   General advice - Use SPL. Once you struck speed or latency limit, modify critical/intensive code section via registers instead of library calls.
+ *
+ */
+
+
+/*
+ * HW description
+ * A0	- PA_EN		(RF_AMP)	(HIGH=TX ON)	\ don't leave high simultaneously
+ * A1	- LNA_EN	(RF_AMP)	(HIGH=RX ON)	/
+ * A2	- USART2_TX (RS485)
+ * A3	- USART2_RX (RS485)
+ * A4	- RF_CS/				(HIGH=COM OFF)
+ * A5	- SPI1_SCK
+ * A6	- SPI1_MISO
+ * A7	- SPI1_MOSI
+ * A8	- RS485_DIR				(0=rx 1=tx)
+ * A9 	- USART1_TX (USB)
+ * A10 	- USART1_RX (USB)
+ * A11	- CTS/		(USB)
+ * A12	- RTS/		(USB)
+ * A15	- LED					(HIGH=ON)
+ * B0	- RF_GPIO2
+ * B1	- RF_GPIO3
+ * B2	- RF_RST/				(HIGH=DEV_OFF)
+ * F0	- HGM		(RF_AMP)	(HIGH=ON)
+ */
+
+
+
+//global structures
+GPIO_InitTypeDef GPIO_InitStructure;
+
+// global variables
+uint32_t i;				// 32bit unsigned integer
+
+
+
+int main(void)
+{
+	// Clock setting sequence. Using internal 8MHz oscillator to make the maximum frequency 48MHz for the core.
+	RCC_HSICmd(ENABLE);
+	while (RCC_GetFlagStatus(RCC_FLAG_HSIRDY) == RESET);	// Wait till HSI is ready
+
+	RCC_PLLConfig(RCC_PLLSource_HSI_Div2, RCC_PLLMul_12); 	// PLLCLK = 8MHz/2 * 12 = 48 MHz
+	RCC_PLLCmd (ENABLE);
+	while (RCC_GetFlagStatus(RCC_FLAG_PLLRDY) == RESET);	// Wait till PLL is ready
+	RCC_SYSCLKConfig (RCC_SYSCLKSource_PLLCLK);				// Select PLL as system clock source
+	while (RCC_GetSYSCLKSource() != 0x08);					// Wait till PLL is used as system clock source =SYSCLK
+
+	/* Set system dividers */
+	RCC_HCLKConfig  (RCC_SYSCLK_Div1);   		// HCLK   = SYSCLK
+	RCC_PCLKConfig  (RCC_HCLK_Div1);     		// PCLK2  = HCLK
+
+	RCC_AHBPeriphClockCmd(RCC_AHBPeriph_GPIOA, ENABLE);		// Enable clock into GPIOA peripheral
+
+
+	// Initialize LED pin as GPIO
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_15;
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_OUT;
+	GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_2MHz;
+	GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_NOPULL;
+	GPIO_Init(GPIOA, &GPIO_InitStructure);
+
+
+
+    while(1)
+    {
+    	// LED toggling using peripheral libraries
+    	GPIO_WriteBit(GPIOA, GPIO_Pin_15, 1);	// LED on
+    	for (i=0;i<500000;i++);					// wait
+    	GPIO_WriteBit(GPIOA, GPIO_Pin_15, 0);	// LED off
+		for (i=0;i<500000;i++);					// wait
+
+
+		// LED toggling using registers
+/*		 GPIOA->ODR ^= GPIO_Pin_15;				// toggle value of bit 15
+		 for (i=0;i<500000;i++);				// wait
+*/
+
+    }
+
+}
+
+
 
