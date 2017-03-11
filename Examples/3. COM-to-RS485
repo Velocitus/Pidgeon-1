@@ -1,0 +1,130 @@
+#include "stm32f0xx.h"
+#include "stm32f0xx_gpio.h"
+#include "stm32f0xx_rcc.h"
+
+/*
+ *
+ */
+
+
+/*
+ * HW description
+ * A0	- PA_EN		(RF_AMP)	(HIGH=TX ON)	\ don't leave high simultaneously
+ * A1	- LNA_EN	(RF_AMP)	(HIGH=RX ON)	/
+ * A2	- USART2_TX (RS485)
+ * A3	- USART2_RX (RS485)
+ * A4	- RF_CS/				(HIGH=COM OFF)
+ * A5	- SPI1_SCK
+ * A6	- SPI1_MISO
+ * A7	- SPI1_MOSI
+ * A8	- RS485_DIR				(0=rx 1=tx)
+ * A9 	- USART1_TX (USB)
+ * A10 	- USART1_RX (USB)
+ * A11	- CTS/		(USB)
+ * A12	- RTS/		(USB)
+ * A15	- LED					(HIGH=ON)
+ * B0	- RF_GPIO2
+ * B1	- RF_GPIO3
+ * B2	- RF_RST/				(HIGH=DEV_OFF)
+ * F0	- HGM		(RF_AMP)	(HIGH=ON)
+ */
+
+
+
+//global structures
+GPIO_InitTypeDef GPIO_InitStructure;
+
+// global variables
+uint32_t i;				// 32bit unsigned integer
+
+
+
+int main(void)
+{
+  // Clock setting sequence. Using internal 8MHz oscillator to make the maximum frequency 48MHz for the core.
+	RCC_HSICmd(ENABLE);
+	while (RCC_GetFlagStatus(RCC_FLAG_HSIRDY) == RESET);	// Wait till HSI is ready
+
+	RCC_PLLConfig(RCC_PLLSource_HSI_Div2, RCC_PLLMul_12); 	// PLLCLK = 8MHz/2 * 12 = 48 MHz
+	RCC_PLLCmd (ENABLE);
+	while (RCC_GetFlagStatus(RCC_FLAG_PLLRDY) == RESET);	// Wait till PLL is ready
+	RCC_SYSCLKConfig (RCC_SYSCLKSource_PLLCLK);				// Select PLL as system clock source
+	while (RCC_GetSYSCLKSource() != 0x08);					// Wait till PLL is used as system clock source =SYSCLK
+
+	/* Set system dividers */
+	RCC_HCLKConfig  (RCC_SYSCLK_Div1);   		// HCLK   = SYSCLK
+	RCC_PCLKConfig  (RCC_HCLK_Div1);     		// PCLK2  = HCLK
+
+	RCC_AHBPeriphClockCmd(RCC_AHBPeriph_GPIOA, ENABLE);		// Enable clock into GPIOA peripheral
+
+
+	// Initialize LED pin as GPIO
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_15;
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_OUT;
+	GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_2MHz;
+	GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_NOPULL;
+	GPIO_Init(GPIOA, &GPIO_InitStructure);
+
+  // Initialize pins for peripheral control
+  GPIO_InitStructure.GPIO_Pin =  GPIO_Pin_2 | GPIO_Pin_3 | GPIO_Pin_9 | GPIO_Pin_10;
+  GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF;
+  GPIO_Init(GPIOA, &GPIO_InitStructure);
+  // COM
+  GPIO_PinAFConfig(GPIOA, GPIO_PinSource9, GPIO_AF_1);	
+  GPIO_PinAFConfig(GPIOA, GPIO_PinSource10, GPIO_AF_1);	
+  // RS485
+  GPIO_PinAFConfig(GPIOA, GPIO_PinSource2, GPIO_AF_1);		
+  GPIO_PinAFConfig(GPIOA, GPIO_PinSource3, GPIO_AF_1);
+
+  // COM
+  USART_InitStructure.USART_BaudRate = 115200;
+  USART_InitStructure.USART_WordLength = USART_WordLength_8b;
+  USART_InitStructure.USART_StopBits = USART_StopBits_1;
+  USART_InitStructure.USART_Parity = USART_Parity_No;
+  USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
+  USART_InitStructure.USART_Mode = USART_Mode_Rx | USART_Mode_Tx;
+  USART_Init(USART1, &USART_InitStructure);
+  
+  USART_MSBFirstCmd(USART1,  DISABLE);
+  USART_Cmd(USART1, ENABLE);
+
+  // RS485 
+  USART_InitStructure.USART_BaudRate = 9600;
+  USART_InitStructure.USART_WordLength = USART_WordLength_8b;
+  USART_InitStructure.USART_StopBits = USART_StopBits_1;
+  USART_InitStructure.USART_Parity = USART_Parity_No;
+  USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
+  USART_InitStructure.USART_Mode = USART_Mode_Rx | USART_Mode_Tx;
+  USART_Init(USART2, &USART_InitStructure);
+
+  USART_MSBFirstCmd(USART2,  DISABLE);
+  USART_Cmd(USART2, ENABLE);
+
+  //TODO uart sending from any buffer not just UART_TX...or optimize buffer trading
+
+  while(1)
+  {
+
+    if (USART_GetFlagStatus(USART1,USART_FLAG_RXNE) != RESET)		// rx USB -> tx RS485
+    {
+      GPIO_WriteBit(GPIOA, GPIO_Pin_8, 1);	// RS485_DIR 0=rx
+      USART_SendData(USART2,USART_ReceiveData(USART1));
+      while (USART_GetFlagStatus(USART2, USART_FLAG_TC) == RESET);
+      GPIOA->ODR ^=0x8000;
+      GPIO_WriteBit(GPIOA, GPIO_Pin_8, 0);	// RS485_DIR 0=rx
+    }
+
+    if (USART_GetFlagStatus(USART2,USART_FLAG_RXNE) != RESET)		// rx RS485 -> tx USB
+    {
+      USART_SendData(USART1,USART_ReceiveData(USART2));
+      while (USART_GetFlagStatus(USART1, USART_FLAG_TC) == RESET);
+      GPIOA->ODR ^=0x8000;
+    }
+
+  }
+
+}
+
+
+
