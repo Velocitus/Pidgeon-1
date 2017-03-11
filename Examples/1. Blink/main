@@ -80,14 +80,14 @@ int main(void)
     {
     	// LED toggling using peripheral libraries
     	GPIO_WriteBit(GPIOA, GPIO_Pin_15, 1);	// LED on
-    	for (i=0;i<500000;i++);					// wait
+    	for (i=0;i<500000;i++);			// wait
     	GPIO_WriteBit(GPIOA, GPIO_Pin_15, 0);	// LED off
-		for (i=0;i<500000;i++);					// wait
+	for (i=0;i<500000;i++);			// wait
 
 
-		// LED toggling using registers
-/*		 GPIOA->ODR ^= GPIO_Pin_15;				// toggle value of bit 15
-		 for (i=0;i<500000;i++);				// wait
+	// LED toggling using registers
+/*	GPIOA->ODR ^= GPIO_Pin_15;		// toggle value of bit 15
+	for (i=0;i<500000;i++);			// wait
 */
 
     }
