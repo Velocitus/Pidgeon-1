@@ -1,0 +1,733 @@
+#include "stm32f0xx.h"
+#include "stm32f0xx_gpio.h"
+#include "stm32f0xx_rcc.h"
+#include "stm32f0xx_usart.h"
+#include "stm32f0xx_spi.h"
+#include "stm32f0xx_exti.h"
+#include "stm32f0xx_misc.h"
+#include "stm32f0xx_syscfg.h"
+
+uint8_t SPI_prenos(uint8_t data);
+static void manualCalibration(void);
+uint8_t SPI_prenos(uint8_t data);
+int16_t RF_getRSSI(void);
+uint8_t RF_init();
+void sendRF(uint8_t length, uint8_t data[]);
+uint8_t CC112X_setting(uint16_t addr, uint8_t data);
+
+
+GPIO_InitTypeDef GPIO_InitStructure;
+USART_InitTypeDef USART_InitStructure;
+USART_ClockInitTypeDef USART_ClockInitStruct;
+SPI_InitTypeDef SPI_InitStructure;
+EXTI_InitTypeDef   EXTI_InitStructure;
+NVIC_InitTypeDef   NVIC_InitStructure;
+
+// global var
+uint16_t i,j,k;
+ int16_t si;
+uint8_t  temp;
+uint16_t temp16, temp16M, temp16R;
+
+//global buffers
+uint8_t USART_RX_BUFFER[128];
+uint8_t USART_RX_INDEX,USART_RX_NUM;
+uint8_t USART_TX_BUFFER[128];
+uint8_t USART_TX_INDEX, USART_TX_NUM;
+uint8_t RF_BUFFER[128];
+uint8_t MSG_BUFFER[128];
+uint8_t MSG_LENGTH;
+uint8_t CMD_BUFFER[32];
+uint8_t CMD_LENGTH;
+
+//	RF_settings
+uint8_t	ADDR = 6;
+ int16_t TEMPERATURE;
+uint32_t FREQ;
+int16_t FREQOFF;
+uint32_t BAUD;
+uint8_t  CHBW;
+uint8_t  TXPW;
+uint8_t  FMOD;
+int16_t  RSSI,tempRSSI;
+uint8_t RF_stat = 0,
+		RF_flag = 0;	// 0x01=reception!
+
+
+int main(void)
+{
+	RCC_HSICmd(ENABLE);
+	/* Wait till HSI is ready                                               */
+	while (RCC_GetFlagStatus(RCC_FLAG_HSIRDY) == RESET);
+	/* PLLCLK = 8MHz/2 * 12 = 48 MHz                                           */
+	RCC_PLLConfig(RCC_PLLSource_HSI_Div2, RCC_PLLMul_12);
+	/* Enable PLL                     */
+	RCC_PLLCmd (ENABLE);
+	/* Wait till PLL is ready                                               */
+	while (RCC_GetFlagStatus(RCC_FLAG_PLLRDY) == RESET);
+	/* Select PLL as system clock source                                    */
+	RCC_SYSCLKConfig (RCC_SYSCLKSource_PLLCLK);
+	/* Wait till PLL is used as system clock source                         */
+	while (RCC_GetSYSCLKSource() != 0x08);
+	/* Set system dividers */
+	RCC_HCLKConfig  (RCC_SYSCLK_Div1);   /* HCLK   = SYSCLK                */
+	RCC_PCLKConfig  (RCC_HCLK_Div1);     /* PCLK2  = HCLK                  */
+	RCC_ADCCLKConfig(RCC_ADCCLK_PCLK_Div4);    /* ADCCLK = PCLK/4               */
+	RCC_USARTCLKConfig(RCC_USART1CLK_PCLK);
+
+		RCC_AHBPeriphClockCmd(RCC_AHBPeriph_GPIOA |RCC_AHBPeriph_GPIOB, ENABLE);
+		RCC_APB1PeriphClockCmd(RCC_APB1Periph_USART2, ENABLE);
+		RCC_APB2PeriphClockCmd(RCC_APB2Periph_SYSCFG | RCC_APB2ENR_SPI1EN | RCC_APB2Periph_USART1, ENABLE);
+
+		RCC_AHBPeriphClockCmd(RCC_AHBPeriph_GPIOF, ENABLE);
+		GPIO_InitStructure.GPIO_Pin = GPIO_Pin_0;
+		GPIO_InitStructure.GPIO_Mode = GPIO_Mode_OUT;
+		GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+		GPIO_InitStructure.GPIO_Speed = GPIO_Speed_2MHz;
+		GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_NOPULL;
+		GPIO_Init(GPIOF, &GPIO_InitStructure);
+		GPIO_WriteBit(GPIOF, GPIO_Pin_0, 1);				// HGM
+		RCC_AHBPeriphClockCmd(RCC_AHBPeriph_GPIOF, DISABLE);
+
+		GPIO_InitStructure.GPIO_Pin = GPIO_Pin_2;
+		GPIO_InitStructure.GPIO_Mode = GPIO_Mode_OUT;
+		GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+		GPIO_InitStructure.GPIO_Speed = GPIO_Speed_2MHz;
+		GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_NOPULL;
+		GPIO_Init(GPIOB, &GPIO_InitStructure);
+
+		GPIO_InitStructure.GPIO_Pin = GPIO_Pin_0 | GPIO_Pin_1;
+		GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IN;
+		GPIO_InitStructure.GPIO_Speed = GPIO_Speed_10MHz;		// same for all below
+		GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_NOPULL;
+		GPIO_Init(GPIOB, &GPIO_InitStructure);
+
+		GPIO_InitStructure.GPIO_Pin =  GPIO_Pin_2 | GPIO_Pin_3 | GPIO_Pin_5 | GPIO_Pin_6 | GPIO_Pin_7 | GPIO_Pin_9 | GPIO_Pin_10 | GPIO_Pin_11 | GPIO_Pin_12;
+		GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF;
+		GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+//		GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_NOPULL;
+		GPIO_Init(GPIOA, &GPIO_InitStructure);
+
+		GPIO_InitStructure.GPIO_Pin = GPIO_Pin_0 | GPIO_Pin_1  | GPIO_Pin_4 | GPIO_Pin_15 | GPIO_Pin_8 ;
+		GPIO_InitStructure.GPIO_Mode = GPIO_Mode_OUT;
+//		GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+//		GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_NOPULL;
+		GPIO_Init(GPIOA, &GPIO_InitStructure);
+
+		SPI_InitStructure.SPI_Direction = SPI_Direction_2Lines_FullDuplex;
+		SPI_InitStructure.SPI_Mode = SPI_Mode_Master;
+		SPI_InitStructure.SPI_DataSize = SPI_DataSize_8b;
+		SPI_InitStructure.SPI_CPOL = SPI_CPOL_Low;
+		SPI_InitStructure.SPI_CPHA = SPI_CPHA_1Edge;
+		SPI_InitStructure.SPI_NSS = SPI_NSS_Soft;
+		SPI_InitStructure.SPI_BaudRatePrescaler = SPI_BaudRatePrescaler_8;
+		SPI_InitStructure.SPI_FirstBit = SPI_FirstBit_MSB;
+		SPI_InitStructure.SPI_CRCPolynomial = 7;
+		SPI_Init(SPI1, &SPI_InitStructure);
+		SPI_Cmd(SPI1, ENABLE);
+		SPI_RxFIFOThresholdConfig(SPI1, SPI_RxFIFOThreshold_QF);
+
+		// USB
+		GPIO_PinAFConfig(GPIOA, GPIO_PinSource9, GPIO_AF_1);		
+		GPIO_PinAFConfig(GPIOA, GPIO_PinSource10, GPIO_AF_1);		
+		USART_InitStructure.USART_BaudRate = 115200;
+		USART_InitStructure.USART_WordLength = USART_WordLength_8b;
+		USART_InitStructure.USART_StopBits = USART_StopBits_1;
+		USART_InitStructure.USART_Parity = USART_Parity_No;
+		USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
+		USART_InitStructure.USART_Mode = USART_Mode_Rx | USART_Mode_Tx;
+		USART_Init(USART1, &USART_InitStructure);
+		USART_ITConfig(USART1, USART_IT_RXNE, ENABLE);
+		USART_ITConfig(USART1, USART_IT_TC, ENABLE);
+		USART_MSBFirstCmd(USART1,  DISABLE);
+		USART_Cmd(USART1, ENABLE);
+//		USART_ClearITPendingBit(USART1, USART_IT_TC);
+//		while (USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET);
+
+		// GPIO default states - necesarry to set after perif. init., yet before interrupts init.
+		GPIO_WriteBit(GPIOA, GPIO_Pin_4, 1);	// RF_CS/
+		GPIO_WriteBit(GPIOB, GPIO_Pin_2, 1);	// RF_RST/
+		GPIO_WriteBit(GPIOA, GPIO_Pin_8, 0);	// RS485_DIR 0=rx
+
+
+//		__disable_irq();
+		/* Connect EXTI0 Line to PB0 pin */
+		SYSCFG_EXTILineConfig(EXTI_PortSourceGPIOB, EXTI_PinSource0);
+		SYSCFG_EXTILineConfig(EXTI_PortSourceGPIOB, EXTI_PinSource1);
+		/* */
+		EXTI_ClearITPendingBit(EXTI_Line0);
+		EXTI_InitStructure.EXTI_Line = EXTI_Line0;
+		EXTI_InitStructure.EXTI_Mode = EXTI_Mode_Interrupt;
+		EXTI_InitStructure.EXTI_Trigger = EXTI_Trigger_Rising;
+		EXTI_InitStructure.EXTI_LineCmd = ENABLE;
+		EXTI_Init(&EXTI_InitStructure);
+		/*  */
+		EXTI_ClearITPendingBit(EXTI_Line1);
+		EXTI_InitStructure.EXTI_Line = EXTI_Line1;
+		EXTI_InitStructure.EXTI_Mode = EXTI_Mode_Interrupt;
+		EXTI_InitStructure.EXTI_Trigger = EXTI_Trigger_Rising_Falling;
+		EXTI_InitStructure.EXTI_LineCmd = ENABLE;
+		EXTI_Init(&EXTI_InitStructure);
+		// Enable and set EXTI Interrupt
+		NVIC_InitStructure.NVIC_IRQChannel = EXTI0_1_IRQn;
+		NVIC_InitStructure.NVIC_IRQChannelPriority = 0x00;
+		NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
+		NVIC_Init(&NVIC_InitStructure);
+		/*USART1*/
+		NVIC_InitStructure.NVIC_IRQChannel = USART1_IRQn;
+		NVIC_InitStructure.NVIC_IRQChannelPriority = 0;			// vyssia?
+		NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
+		NVIC_Init(&NVIC_InitStructure);
+		/*TIM6 IRQ*/
+		NVIC_InitStructure.NVIC_IRQChannel = TIM6_DAC_IRQn;
+		NVIC_InitStructure.NVIC_IRQChannelPriority = 0;
+		NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
+		NVIC_Init(&NVIC_InitStructure);
+
+		// GPIO_WriteBit(GPIOA, GPIO_Pin_1, 0);	// TX end
+		// GPIO_WriteBit(GPIOA, GPIO_Pin_1, 1);	// TX rdy
+		// GPIO_WriteBit(GPIOA, GPIO_Pin_0, 0);	// RX end
+		// GPIO_WriteBit(GPIOA, GPIO_Pin_0, 1);	// RX rdy
+
+
+//		GPIO_WriteBit(GPIOA, GPIO_Pin_0, 1);	// PA_EN
+
+		GPIO_WriteBit(GPIOA, GPIO_Pin_15, 1);	// LED
+
+//		USART_Send_Blocking("AHOJ");
+		RF_flag=0; RSSI=0;
+//		__enable_irq();
+
+    	GPIO_WriteBit(GPIOA, GPIO_Pin_4, 0);	// RF_CS/
+    	while(GPIO_ReadInputDataBit(GPIOA, GPIO_Pin_6)==1);		// wait till RF rdy
+    	RF_init();
+    	j=SPI_prenos(0x3D);
+    	if (j==0x0F)
+    		GPIO_WriteBit(GPIOA, GPIO_Pin_15, 0);	// LED
+//    	SPI_prenos(0x37);	// AFC strobe
+
+    	for(i=0;i<120;i++)
+    		USART_TX_BUFFER[i] = i;
+    	USART_TX_NUM=0;
+    	MSG_LENGTH=0; CMD_LENGTH=0;
+
+    	GPIO_WriteBit(GPIOA, GPIO_Pin_1, 1);	// LNA_EN -> RX rdy
+		// SFRX - RX FLUSH
+		SPI_prenos(0x3A);
+		// set to receive
+		SPI_prenos(0x34);
+		TIM_Cmd(TIM6, ENABLE);
+
+		//TODO uart sending from any buffer not just UART_TX...or optimize buffer trading
+
+    while(1)
+    {
+    	/*if ( USART_RX_BUFFER[USART_RX_INDEX-1]==0x0D )	// enter received
+    	{
+    		j=USART_RX_INDEX-1;
+    		USART_RX_INDEX=0;
+    		sendRF(j,USART_RX_BUFFER);
+    		GPIOA->ODR ^=0x8000;
+    	}*/
+
+/*   	if (RF_stat==0x7F)	 // TX err
+    	{
+    		USART_Send_Preemptive("\r\nTX err! Waiting... \r\n");
+    	}
+    	else if (RF_stat==0x6F)	// RX err
+    	{
+    		// SFRX - RX FLUSH
+			SPI_prenos(0x3A);
+			// set to receive
+			SPI_prenos(0x34);
+			USART_Send_Preemptive("\r\nRX err! Reseting... \r\n");
+    	}
+*/
+    	if (USART_RX_INDEX!=0)	// char received
+		{
+    		for (i=0;i<USART_RX_INDEX;i++)			// add characters to message
+			{
+    			if (USART_RX_BUFFER[i]=='\r')		// enter
+    			{
+						sendRF(MSG_LENGTH,MSG_BUFFER);
+						MSG_LENGTH=0;
+						USART_Send_Preemptive(" - ok \r\n");
+    			}
+    			else if (USART_RX_BUFFER[i]==0x08)	// backspace
+    			{
+    				MSG_LENGTH--;
+    			}
+    			else
+    			{
+					MSG_BUFFER[MSG_LENGTH++]=USART_RX_BUFFER[i];
+					if ((i+1)==USART_RX_INDEX)
+					{
+						while ( (USART_TX_NUM + MSG_LENGTH) > 128);
+						USART_TX_BUFFER[USART_TX_NUM++]='\r';
+						for (i=0;i<MSG_LENGTH;i++)					// add MSG buffer to UART buffer
+						{
+							USART_TX_BUFFER[USART_TX_NUM++]=MSG_BUFFER[i];
+						}
+						if(USART_TX_INDEX == 0)		// if UART not sending
+						{
+							USART_SendData(USART1,USART_TX_BUFFER[USART_TX_INDEX++]);	// manually initiate first transfer to trigger interrupt-based flush
+						}
+					}
+    			}
+			}
+			USART_RX_INDEX=0;
+		}
+    	else if (RF_flag==1)				// RF_MSG received
+    	{
+    		RF_flag=0;
+   // 		j=SPI_prenos(0x3D);		// chceck state - debug reasons
+
+    		// TODO wrong packet filtering
+
+    		// FIFO_RX_NUM
+			SPI_prenos(0xAF);	SPI_prenos(0xD7);	temp=SPI_prenos(0xFF);		// data rdy?
+			if (temp==0)														// if not, report lost packet
+			{
+				USART_Send_Preemptive(" - PACKET RECEPTION CORRUPTED - \n");
+//				continue;
+			}
+			else
+			{
+				SPI_prenos(0xBF);	RF_BUFFER[0]=SPI_prenos(0xFF);				// read first byte (packet length)
+				for (i=0;i<RF_BUFFER[0]+2;i++)								// read the rest +2 CRC bytes
+				{
+					SPI_prenos(0xBF);	RF_BUFFER[i+1]=SPI_prenos(0xFF);
+				}
+
+				// SFRX - RX FLUSH
+	//			SPI_prenos(0x3A);
+				// set to receive
+				SPI_prenos(0x34);
+
+				
+
+				// prefix TODO redo for proper name/ID field
+				while ( (USART_TX_NUM + 7) > 128);
+				USART_TX_BUFFER[USART_TX_NUM++]='\r';
+				USART_TX_BUFFER[USART_TX_NUM++]='-';
+				USART_TX_BUFFER[USART_TX_NUM++]='>';
+				USART_TX_BUFFER[USART_TX_NUM++]='I';
+				USART_TX_BUFFER[USART_TX_NUM++]='D';
+				USART_TX_BUFFER[USART_TX_NUM++]=':';
+				USART_TX_BUFFER[USART_TX_NUM++]=' ';
+
+				while ( (USART_TX_NUM + RF_BUFFER[0]) > 128);	// wait till there is buffer-space for next msg
+
+        for (i=0;i<RF_BUFFER[0];i++)					// add RF buffer to UART buffer
+        {
+          USART_TX_BUFFER[USART_TX_NUM++]=RF_BUFFER[i+1];			// +1 offset for not writing msg length byte
+        }
+
+				for(si=(MSG_LENGTH-RF_BUFFER[0]);si>0;si--)	// if typed msg was longer than received one -> visually blank typed letters
+				{
+					while ( USART_TX_NUM > 128);
+					USART_TX_BUFFER[USART_TX_NUM++]=' ';
+				}
+
+				USART_TX_BUFFER[USART_TX_NUM++]='\r';	//suffix
+				USART_TX_BUFFER[USART_TX_NUM++]='\n';
+
+				if(USART_TX_INDEX == 0)		// if UART not sending
+				{
+					USART_SendData(USART1,USART_TX_BUFFER[USART_TX_INDEX++]);	// manually initiate first transfer to trigger interrupt-based flush
+				}
+
+				while ( (USART_TX_NUM + MSG_LENGTH) > 128);
+				for (i=0;i<MSG_LENGTH;i++)					// rewrite msg to scr
+				{
+					USART_TX_BUFFER[USART_TX_NUM++]=MSG_BUFFER[i];
+				}
+			}
+    	}
+    	else { RF_stat=0;}
+
+
+    }
+}
+
+
+void EXTI0_1_IRQHandler(void)
+{
+	if(EXTI_GetITStatus(EXTI_Line0) != RESET)
+	{
+		EXTI_ClearITPendingBit(EXTI_Line0);
+	}
+
+	if (EXTI_GetITStatus(EXTI_Line1) != RESET)
+	{
+		if (GPIO_ReadInputDataBit(GPIOB,GPIO_Pin_1)==0)
+		{
+			RF_flag=1;
+		}
+		else
+		{
+			RSSI = RF_getRSSI();
+		}
+		EXTI_ClearITPendingBit(EXTI_Line1);
+	}
+}
+
+void USART1_IRQHandler(void)
+{
+  if(USART_GetITStatus(USART1, USART_IT_RXNE) != RESET)
+  {
+	  USART_RX_BUFFER[USART_RX_INDEX++] = USART_ReceiveData(USART1);
+//	  USART_SendData(USART1, USART_RX_BUFFER[USART_RX_INDEX-1]);	// direct echo
+
+	  if(USART_RX_INDEX==128)
+	  {
+		  USART_RX_INDEX=0;
+	  }
+
+	  USART_ClearITPendingBit(USART1, USART_IT_RXNE);
+  }
+
+  if(USART_GetITStatus(USART1, USART_IT_TC) != RESET)
+  {
+	  if(USART_TX_INDEX != USART_TX_NUM)
+	  {
+		  USART_SendData(USART1,USART_TX_BUFFER[USART_TX_INDEX++]);
+	  }
+	  else
+	  {
+		  USART_TX_INDEX=0;
+		  USART_TX_NUM  =0;
+	  }
+
+	  USART_ClearITPendingBit(USART1, USART_IT_TC);
+  }
+}
+
+
+void USART_Send_Blocking(volatile char *str)
+{
+	while(*str)
+	{
+		while(USART_GetFlagStatus(USART1,USART_FLAG_TXE) == RESET);
+		USART_SendData(USART1,*str);
+		str++;
+	}
+}
+
+void USART_Send_Preemptive(volatile char *str)
+{
+	while(*str)		// Load data to UART TX buffer
+	{
+		while(USART_TX_NUM>128);	// wait for buffer space
+		USART_TX_BUFFER[USART_TX_NUM++]=*str;
+		str++;
+	}
+
+	if(USART_TX_INDEX == 0)		// if UART not sending		// TODO use apropriate flag
+	{
+		USART_SendData(USART1,USART_TX_BUFFER[USART_TX_INDEX++]);	// manually initiate first transfer to trigger interrupt-based flush
+	}
+}
+
+
+uint8_t CC112X_setting(uint16_t addr, uint8_t data)
+{
+	char temp = addr>>8;
+
+//	GPIO_ResetBits(GPIOC,GPIO_Pin_10);	//CS
+
+	if (temp!=0x00) SPI_prenos(temp);
+
+	SPI_prenos((char)addr);
+    temp = SPI_prenos(data);
+
+//    GPIO_SetBits(GPIOC,GPIO_Pin_10);	//CS
+    return temp;
+}
+
+int16_t RF_getRSSI(void)
+{
+	uint16_t RSSI_raw = 0;
+	int16_t newRSSI = 0;
+	uint8_t RF_status = 0;
+
+	// wait for RSSI_rdy
+	do {
+		SPI_prenos(0xAF);	SPI_prenos(0x72);	RF_status = SPI_prenos(0xFF);
+	   } while ((RF_status&0x1)==0);
+
+	// get RSSI-MSB
+	SPI_prenos(0xAF);	SPI_prenos(0x71);	RSSI_raw = SPI_prenos(0xFF);
+
+	//RSSI_raw = (RSSI_raw<<4) | ((RF_status>>3)&0xF);
+	if (RSSI_raw >= 0x80) {newRSSI = 0x00FF & (~(RSSI_raw-1)); newRSSI -= 2*newRSSI;  }
+	else newRSSI = RSSI_raw;
+
+	return newRSSI;
+
+}
+
+
+
+/*
+ * if called during RX -> will change state, transmit, continue with RX
+ * blocking till transmission finished
+ */
+void sendRF(uint8_t length, uint8_t data[])
+{
+	uint8_t status = 0x00;
+	uint16_t bezec = 0;
+	uint8_t RX_mark = 0;
+
+//	GPIO_ResetBits(GPIOC,GPIO_Pin_10);	//CS
+	if (SPI_prenos(0x3D)==0x1F)	{RX_mark=1; SPI_prenos(0x36); }	// if in RX, mark and go to idle
+//	while (status!=0xF) {status = SPI_prenos(0x3D);} //  WAIT TILL IDLE
+	status = 0;
+	GPIO_WriteBit(GPIOA, GPIO_Pin_1, 0);	// RX end
+	GPIO_WriteBit(GPIOA, GPIO_Pin_0, 1);	// TX rdy
+	__disable_irq();		// to avoid setting RF_flag...lazy way
+	GPIOA->ODR ^=0x8000;	// LED toggle
+
+	// SFTX - TX FLUSH
+	SPI_prenos(0x3B);
+	//TX FIFO - length byte
+	CC112X_setting(0x003F,length);
+	//TX FIFO - data byte
+	for(bezec=0;bezec<length;bezec++)
+		CC112X_setting(0x003F,data[bezec]);
+
+	// kratka pauza
+	for(bezec=0;bezec<1000;bezec++);
+
+	SPI_prenos(0x35); 			// TX mode
+
+	status = SPI_prenos(0x3D);	//get status
+
+	while(status!=0x40) // data sent?
+	{
+		//FIFO TXBYTES NUM
+		//SPI_prenos(0xAF);	SPI_prenos(0xD6);	remaining=SPI_prenos(0xFF);
+		//MARC _STATUS1 - TX succesful = 0x40
+		SPI_prenos(0xAF);	SPI_prenos(0x94);	status=SPI_prenos(0xFF);
+//		j = SPI_prenos(0x3D);	//get status
+	//	data = SPI_dup(0xAF94,0xFF);
+		//MARC _STATE - TX succesful = 0x34
+		//SPI_prenos(0xAF);	SPI_prenos(0x73);	data=SPI_prenos(0xFF);
+	}
+
+	GPIOA->ODR ^=0x8000;	// LED toggle
+	status = SPI_prenos(0x3D);	//get status
+
+	EXTI_ClearITPendingBit(EXTI_Line1);		// to put IRQ in order after after disable_IRQ
+	__enable_irq();
+
+	GPIO_WriteBit(GPIOA, GPIO_Pin_0, 0);	// TX end
+	if (RX_mark==1)
+	{
+		GPIO_WriteBit(GPIOA, GPIO_Pin_1, 1);	// RX rdy
+		// SFRX - RX FLUSH
+		SPI_prenos(0x3A);
+		// set to receive
+		SPI_prenos(0x34);
+	}
+}
+
+/*
+ * Send 16-bit signed number over UART as ASCII characters
+ */
+void COMint(int16_t data)
+{
+	uint8_t s,d,j;
+	int16_t dataP=data;
+
+	if(data<0) { USART_TX_BUFFER[USART_TX_NUM++]= '-'; dataP=data*(-1);}
+/*
+	t = dataP/1000;// + 48;
+	s = (dataP-(t*1000))/100;// + 48;
+	d = (dataP-(t*1000+s*100))/10;// + 48;
+	j =  dataP%10;//-(t*1000+s*100+d*10);// + 48;
+*/
+	s = dataP/100;
+	d = (dataP-(s*100))/10;
+	j =  dataP%10;
+
+//	USART_TX_BUFFER[USART_TX_NUM++]= t+48;
+	USART_TX_BUFFER[USART_TX_NUM++]= s+48;
+	USART_TX_BUFFER[USART_TX_NUM++]= d+48;
+	USART_TX_BUFFER[USART_TX_NUM++]= j+48;
+	USART_TX_BUFFER[USART_TX_NUM++]= ' ';
+
+	if(USART_TX_INDEX == 0)		// if UART not sending
+	{
+		USART_SendData(USART1,USART_TX_BUFFER[USART_TX_INDEX++]);	// manually initiate first transfer to trigger interrupt-based flush
+	}
+}
+
+
+/*
+ * Return status of init ?
+ */
+uint8_t RF_init(void)
+{
+	// settings
+	FREQ = 0x6C8066;	//komp_freq[ADDR];
+	FREQOFF= FREQOFF_DEV[ADDR];
+	BAUD = 0x33;
+	CHBW = 0x50;
+	TXPW = 0x77;
+
+	//while (GPIO_getInputPinValue(GPIO_PORT_P4, GPIO_PIN5) != 0);	// cakaj na "MISO_pin LOW"
+
+	// TODO HW rst ?
+
+	CC112X_setting(0x0000,0x06);   //IOCFG3
+	CC112X_setting(0x0001,0x87);   //IOCFG2
+	CC112X_setting(0x0002,0xB0);   //IOCFG1
+	CC112X_setting(0x0003,0xBC);   //IOCFG0
+	CC112X_setting(0x0008,0x0B);   //SYNC_CFG1		// FSK-0x0B GFSK-0x08
+	CC112X_setting(0x000A,0x89);   //DEVIATION_M	// def=0x06   0x89/0x02-3k
+	CC112X_setting(0x000B,0x02);   //MODCFG_DEV_E 	// 0x03-4k 0x02-2k 0x01-1k		4bit=0-FSK =1-GFSK
+	CC112X_setting(0x000C,0x1C);   //DCFILT_CFG
+	CC112X_setting(0x000D,0x18);   //PREAMBLE_CFG1
+	CC112X_setting(0x0010,0xC6);   //IQIC
+	CC112X_setting(0x0011,CHBW);   //CHAN_BW		// 0x50-7k8  0x14-10k  0x10-12k5  0x0A-20k  0x08-25k
+	CC112X_setting(0x0013,0x05);   //MDMCFG0
+	CC112X_setting(0x0014,BAUD);   //SYMBOL_RATE2 	// 0x23-0.3k  0x33-0.6k  0x43-1.2k  0x53-2.4k  0x63-4.8k  0x73-9.6k  0x78-12k	| max= BW/2
+	CC112X_setting(0x0017,0x20);   //AGC_REF
+	CC112X_setting(0x0018,0x19);   //AGC_CS_THR
+	CC112X_setting(0x0019,0xA6);   //AGC_GAIN_ADJUST	// ignored?
+	CC112X_setting(0x001C,0xA9);   //AGC_CFG1
+	CC112X_setting(0x001D,0xCF);   //AGC_CFG0
+	CC112X_setting(0x001E,0x00);   //FIFO_CFG
+	CC112X_setting(0x0020,0x03);   //SETTLING_CFG
+	CC112X_setting(0x0021,0x12);   //FS_CFG
+	CC112X_setting(0x0026,0x10);   //PKT_CFG2			//0x04  - LBT ETSI
+	CC112X_setting(0x0028,0x20);   //PKT_CFG0
+	CC112X_setting(0x0029,0x3F);   //RFEND_CFG1			//0x0F	- RX after packet
+	CC112X_setting(0x002B,TXPW);   //PA_CFG2		// 0x77=27dBm/11dBm
+	CC112X_setting(0x002E,0xFF);   //PKT_LEN
+	CC112X_setting(0x2F00,0x00);   //IF_MIX_CFG
+	CC112X_setting(0x2F01,0x23);   //FREQOFF_CFG
+	CC112X_setting(0x2F0A,FREQOFF>>8);	//FREQOFF1
+	CC112X_setting(0x2F0B,FREQOFF);	//FREQOFF0
+	CC112X_setting(0x2F0C,(FREQ>>16));	//FREQ2
+	CC112X_setting(0x2F0D,(FREQ>>8));   //FREQ1
+	CC112X_setting(0x2F0E,(FREQ>>0));   //FREQ0
+	CC112X_setting(0x2F12,0x00);   //FS_DIG1
+	CC112X_setting(0x2F13,0x5F);   //FS_DIG0
+	CC112X_setting(0x2F16,0x40);   //FS_CAL1
+	CC112X_setting(0x2F17,0x0E);   //FS_CAL0
+	CC112X_setting(0x2F19,0x03);   //FS_DIVTWO
+	CC112X_setting(0x2F1B,0x33);   //FS_DSM0
+	CC112X_setting(0x2F1D,0x17);   //FS_DVC0
+	CC112X_setting(0x2F1F,0x50);   //FS_PFD
+	CC112X_setting(0x2F20,0x6E);   //FS_PRE
+	CC112X_setting(0x2F21,0x14);   //FS_REG_DIV_CML
+	CC112X_setting(0x2F22,0xAC);   //FS_SPARE
+	CC112X_setting(0x2F27,0xB4);   //FS_VCO0
+	CC112X_setting(0x2F32,0x0E);   //XOSC5
+	CC112X_setting(0x2F36,0x03);   //XOSC1
+	CC112X_setting(0x2F91,0x08);   //Serial_Status
+
+	// Analog temp reading setup
+	CC112X_setting(0x2F9C,0x2A);	// ATEST
+	CC112X_setting(0x2F9E,0x0C);	// ATEST_MODE
+	CC112X_setting(0x2F2D,0x07);	// GBIAS1
+
+	manualCalibration();
+
+	return 0;
+}
+
+
+
+uint8_t SPI_prenos(uint8_t data)  //TODO buffered+preemptive
+{
+	while (SPI_I2S_GetFlagStatus(SPI1, SPI_SR_TXE) == RESET);
+	SPI_SendData8(SPI1, data);
+
+	while (SPI_I2S_GetFlagStatus(SPI1, SPI_I2S_FLAG_RXNE) == RESET);
+	return SPI_ReceiveData8(SPI1);
+}
+
+#define VCDAC_START_OFFSET 2
+#define FS_VCO2_INDEX 0
+#define FS_VCO4_INDEX 1
+#define FS_CHP_INDEX 2
+static void manualCalibration(void) {
+
+    uint8_t original_fs_cal2;
+    uint8_t calResults_for_vcdac_start_high[3];
+    uint8_t calResults_for_vcdac_start_mid[3];
+    uint8_t marcstate;
+    uint8_t writeByte;
+
+//    GPIO_ResetBits(GPIOC,GPIO_Pin_10);	//CS
+    // 1) Set VCO cap-array to 0 (FS_VCO2 = 0x00)
+    writeByte = 0x00;
+    SPI_prenos(0x2F); SPI_prenos(0x25); SPI_prenos(writeByte);
+
+    // 2) Start with high VCDAC (original VCDAC_START + 2):
+    SPI_prenos(0xAF); SPI_prenos(0x15); original_fs_cal2 = SPI_prenos(0xFF);
+    writeByte = original_fs_cal2 + VCDAC_START_OFFSET;
+    SPI_prenos(0x2F); SPI_prenos(0x15); SPI_prenos(writeByte);
+
+    // 3) Calibrate and wait for calibration to be done
+    //   (radio back in IDLE state)
+    SPI_prenos(0x33);
+
+    do {
+    	SPI_prenos(0xAF); SPI_prenos(0x73); marcstate = SPI_prenos(0xFF);
+    } while (marcstate != 0x41);
+
+    // 4) Read FS_VCO2, FS_VCO4 and FS_CHP register obtained with
+    //    high VCDAC_START value
+    SPI_prenos(0xAF); SPI_prenos(0x25); calResults_for_vcdac_start_high[FS_VCO2_INDEX] = SPI_prenos(0xFF);
+    SPI_prenos(0xAF); SPI_prenos(0x23); calResults_for_vcdac_start_high[FS_VCO4_INDEX] = SPI_prenos(0xFF);
+    SPI_prenos(0xAF); SPI_prenos(0x18); calResults_for_vcdac_start_high[FS_CHP_INDEX] = SPI_prenos(0xFF);
+
+    // 5) Set VCO cap-array to 0 (FS_VCO2 = 0x00)
+    writeByte = 0x00;
+    SPI_prenos(0x2F); SPI_prenos(0x25); SPI_prenos(writeByte);
+
+    // 6) Continue with mid VCDAC (original VCDAC_START):
+    writeByte = original_fs_cal2;
+    SPI_prenos(0x2F); SPI_prenos(0x15); SPI_prenos(writeByte);
+
+    // 7) Calibrate and wait for calibration to be done
+    //   (radio back in IDLE state)
+    SPI_prenos(0x33);
+
+    do {
+       	SPI_prenos(0xAF); SPI_prenos(0x73); marcstate = SPI_prenos(0xFF);
+       } while (marcstate != 0x41);
+
+    // 8) Read FS_VCO2, FS_VCO4 and FS_CHP register obtained
+    //    with mid VCDAC_START value
+    SPI_prenos(0xAF); SPI_prenos(0x25); calResults_for_vcdac_start_mid[FS_VCO2_INDEX] = SPI_prenos(0xFF);
+	SPI_prenos(0xAF); SPI_prenos(0x23); calResults_for_vcdac_start_mid[FS_VCO4_INDEX] = SPI_prenos(0xFF);
+	SPI_prenos(0xAF); SPI_prenos(0x18); calResults_for_vcdac_start_mid[FS_CHP_INDEX] = SPI_prenos(0xFF);
+
+
+    // 9) Write back highest FS_VCO2 and corresponding FS_VCO
+    //    and FS_CHP result
+    if (calResults_for_vcdac_start_high[FS_VCO2_INDEX] >
+        calResults_for_vcdac_start_mid[FS_VCO2_INDEX]) {
+        writeByte = calResults_for_vcdac_start_high[FS_VCO2_INDEX];
+        SPI_prenos(0x2F); SPI_prenos(0x25); SPI_prenos(writeByte);
+        writeByte = calResults_for_vcdac_start_high[FS_VCO4_INDEX];
+        SPI_prenos(0x2F); SPI_prenos(0x23); SPI_prenos(writeByte);
+        writeByte = calResults_for_vcdac_start_high[FS_CHP_INDEX];
+        SPI_prenos(0x2F); SPI_prenos(0x18); SPI_prenos(writeByte);
+    } else {
+        writeByte = calResults_for_vcdac_start_mid[FS_VCO2_INDEX];
+        SPI_prenos(0x2F); SPI_prenos(0x25); SPI_prenos(writeByte);
+        writeByte = calResults_for_vcdac_start_mid[FS_VCO4_INDEX];
+        SPI_prenos(0x2F); SPI_prenos(0x23); SPI_prenos(writeByte);
+        writeByte = calResults_for_vcdac_start_mid[FS_CHP_INDEX];
+        SPI_prenos(0x2F); SPI_prenos(0x18); SPI_prenos(writeByte);
+    }
+//    GPIO_SetBits(GPIOC,GPIO_Pin_10);	//CS
+}
+
+
