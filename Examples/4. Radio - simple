@@ -175,7 +175,7 @@ int main(void)
 		NVIC_Init(&NVIC_InitStructure);
 		/*USART1*/
 		NVIC_InitStructure.NVIC_IRQChannel = USART1_IRQn;
-		NVIC_InitStructure.NVIC_IRQChannelPriority = 0;			// vyssia?
+		NVIC_InitStructure.NVIC_IRQChannelPriority = 0;			// consider higher setting?
 		NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
 		NVIC_Init(&NVIC_InitStructure);
 		/*TIM6 IRQ*/
@@ -576,7 +576,7 @@ uint8_t RF_init(void)
 	CHBW = 0x50;
 	TXPW = 0x77;
 
-	//while (GPIO_getInputPinValue(GPIO_PORT_P4, GPIO_PIN5) != 0);	// cakaj na "MISO_pin LOW"
+	//while (GPIO_getInputPinValue(GPIO_PORT_P4, GPIO_PIN5) != 0);	// wait for "MISO_pin LOW"
 
 	// TODO HW rst ?
 
